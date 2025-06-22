@@ -1,25 +1,16 @@
-name: Pull Request CI(Test)
+name: Cherry Pick CI (Pre-release Feature Backport)
 
 on:
   workflow_dispatch:
     inputs:
-      repo:
-        description: 'Target repository (format: owner/repo)'
+      upstream_repo:
+        description: 'Upstream repository (format: owner/repo)'
         required: true
         default: 'nightscout/AndroidAPS'
 
-      pr_number:
-        description: 'PR number to checkout (e.g. 123)'
+      cherry_pick:
+        description: 'Commit hash(es) to cherry-pick (e.g. abc123 def456)'
         required: true
-
-      pr_ref_type:
-        description: 'Select PR reference type to checkout'
-        required: true
-        default: 'head'
-        type: choice
-        options:
-          - head
-          - merge
 
       buildVariant:
         description: 'Select Build Variant'
@@ -41,6 +32,30 @@ jobs:
     name: Build AAPS
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all remotes and tags
+        run: |
+          echo "🔗 Adding upstream: https://github.com/${{ github.event.inputs.upstream_repo }}.git"
+          git remote add upstream https://github.com/${{ github.event.inputs.upstream_repo }}.git
+          git fetch --all
+
+      - name: Cherry-pick commits
+        run: |
+          echo "➡️ Cherry-picking commits: ${{ github.event.inputs.cherry_pick }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          if ! git cherry-pick ${{ github.event.inputs.cherry_pick }}; then
+            echo "❌ Cherry-pick failed. Exiting."
+            exit 1
+          fi
+          
+          echo "✅ All commits cherry-picked."
+
       - name: Decode Secrets Keystore Set and Oauth2 to Env
         run: |
           if [ -n "${{ secrets.KEYSTORE_SET }}" ]; then
@@ -165,27 +180,6 @@ jobs:
           fi
           echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
           echo "✅ Access token obtained."
-
-      - name: Determine PR reference
-        id: pr_ref
-        run: |
-          PR_NUMBER=${{ github.event.inputs.pr_number }}
-          PR_REF_TYPE=${{ github.event.inputs.pr_ref_type }}
-
-          full_ref="refs/pull/${{ github.event.inputs.pr_number }}/$PR_REF_TYPE"
-
-          echo "Resolved PR ref: $full_ref"
-          echo "ref_name=$full_ref" >> $GITHUB_OUTPUT
-          
-          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
-          echo "PR_REF_TYPE=$PR_REF_TYPE" >> $GITHUB_ENV
-
-      - name: Checkout pull/${{ github.event.inputs.pr_number }}/${{ github.event.inputs.pr_ref_type }}
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.inputs.repo }}
-          ref: ${{ steps.pr_ref.outputs.ref_name }}
-          fetch-depth: 1
 
       - name: Set BUILD_VARIANT
         run: |
@@ -314,8 +308,17 @@ jobs:
 
             echo "✅ Uploaded: $NAME"
           }
+          
+          # Sanitize cherry-pick input to create a safe filename suffix.
+          # Reason: ${{ github.event.inputs.cherry_pick }} may contain special characters,
+          # spaces, or symbols that are invalid or risky in filenames.
+          # This ensures the final name only includes letters, numbers, dash (-), and underscore (_).               
+          CHERRY_PICK_RAW="${{ github.event.inputs.cherry_pick }}"
+          CHERRY_PICK_SAFE=$(echo "$CHERRY_PICK_RAW" | sed 's/ /_/g')
+          CHERRY_PICK_SAFE=$(echo "$CHERRY_PICK_SAFE" | sed 's/[^a-zA-Z0-9_-]/_/g')
+          echo "CHERRY_PICK_SAFE=$CHERRY_PICK_SAFE" >> $GITHUB_ENV
 
-          upload_to_gdrive "aaps-${VERSION}${VERSION_SUFFIX}.apk" "aaps-${VERSION}${VERSION_SUFFIX}_pull-${PR_NUMBER}-${PR_REF_TYPE}.apk"
-          upload_to_gdrive "aaps-wear-${VERSION}${VERSION_SUFFIX}.apk" "aaps-wear-${VERSION}${VERSION_SUFFIX}_pull-${PR_NUMBER}-${PR_REF_TYPE}.apk"
+          upload_to_gdrive "aaps-${VERSION}${VERSION_SUFFIX}.apk" "aaps-${VERSION}${VERSION_SUFFIX}_CP-${CHERRY_PICK_SAFE}.apk"
+          upload_to_gdrive "aaps-wear-${VERSION}${VERSION_SUFFIX}.apk" "aaps-wear-${VERSION}${VERSION_SUFFIX}_CP-${CHERRY_PICK_SAFE}.apk"
 
           echo "🎉 APKs successfully uploaded to Google Drive!"
